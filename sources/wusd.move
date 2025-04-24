@@ -31,6 +31,8 @@ module stablecoin::wusd {
         minters: vector<address>,
         pauser: address,
         denylister: address,
+        recovery: address,
+        burner: address,
     }
 
     #[resource_group_member(group = aptos_framework::object::ObjectGroup)]
@@ -82,6 +84,14 @@ module stablecoin::wusd {
         account: address,
     }
 
+    #[event]
+    struct TokensRecovered has drop, store {
+        admin: address,
+        from: address,
+        to: address,
+        amount: u64,
+    }
+
     #[view]
     public fun wusd_address(): address {
         object::create_object_address(&@stablecoin, ASSET_SYMBOL)
@@ -90,6 +100,122 @@ module stablecoin::wusd {
     #[view]
     public fun metadata(): Object<Metadata> {
         object::address_to_object(wusd_address())
+    }
+
+    #[view]
+    public fun CONTRACT_ADMIN_ROLE(): address {
+        @master_minter
+    }
+
+    #[view]
+    public fun MINTER_ROLE(): address {
+        @minters
+    }
+
+    #[view]
+    public fun PAUSER_ROLE(): address {
+        @pauser
+    }
+
+    #[view]
+    public fun DENYLISTER_ROLE(): address {
+        @denylister
+    }
+
+    #[view]
+    public fun RECOVERY_ROLE(): address {
+        @recovery
+    }
+
+    #[view]
+    public fun BURNER_ROLE(): address {
+        @burner
+    }
+
+    #[view]
+    public fun getRoleAdmin(role: u8): address acquires Roles {
+        let roles = borrow_global<Roles>(wusd_address());
+
+        if (role == 1) { // Minter
+            return roles.master_minter;
+        } else if (role == 2) { // Pauser
+            return roles.master_minter; // Assuming master_minter controls Pauser
+        } else if (role == 3) { // Denylister
+            return roles.master_minter; // Assuming master_minter controls Denylister
+        } else if (role == 4) { // Recovery
+            return roles.master_minter; // Assuming master_minter controls Recovery
+        } else if (role == 5) { // Burner
+            return roles.master_minter; // Assuming master_minter controls Burner
+        } else {
+            abort(EUNAUTHORIZED); // Invalid role identifier
+        }
+    }
+
+    #[view]
+    public fun hasRole(role: u8, account: address): bool acquires Roles {
+        let roles = borrow_global<Roles>(wusd_address());
+
+        if (role == 1) { // Minter
+            return signer::address_of(account) == roles.master_minter || vector::contains(&roles.minters, &account);
+        } else if (role == 2) { // Pauser
+            return signer::address_of(account) == roles.pauser;
+        } else if (role == 3) { // Denylister
+            return signer::address_of(account) == roles.denylister;
+        } else if (role == 4) { // Recovery
+            return signer::address_of(account) == roles.recovery;
+        } else if (role == 5) { // Burner
+            return signer::address_of(account) == roles.burner;
+        } else {
+            abort(EUNAUTHORIZED); // Invalid role identifier
+        }
+    }
+
+    #[view]
+    public fun name(): vector<u8> acquires Metadata {
+        let metadata = metadata();
+        return metadata.name;
+    }
+
+    #[view]
+    public fun symbol(): vector<u8> acquires Metadata {
+        let metadata = metadata();
+        return metadata.symbol;
+    }
+
+    #[view]
+    public fun decimals(): u8 acquires Metadata {
+        let metadata = metadata();
+        return metadata.decimals;
+    }
+
+    #[view]
+    pubnlic fun totalSupply(): u64 acquires Metadata {
+        let metadata = metadata();
+        return metadata.total_supply;
+    }
+
+    #[view]
+    public fun balance_of(account: address): u64 acquires Metadata {
+        let metadata = metadata();
+        return primary_fungible_store::balance(account, metadata);
+    }
+
+    #[view]
+    public fun nonces(account: address): u64 acquires Metadata {
+        let metadata = metadata();
+        return primary_fungible_store::nonces(account, metadata);
+    }
+
+    #[view]
+    public fun allowance(owner: address, spender: address): u64 acquires Metadata {
+        let metadata = metadata();
+        return primary_fungible_store::allowance(owner, spender, metadata);
+    }
+    
+    #[view]
+    public fun paused(): bool acquires State {
+        let state = borrow_global<State>(wusd_address());
+        return state.paused;
     }
 
     /// Called as part of deployment to initialize the stablecoin.
@@ -121,6 +247,8 @@ module stablecoin::wusd {
             minters: vector[],
             pauser: @pauser,
             denylister: @denylister,
+            recover: @recovery,
+            burner: @burner,
         });
 
         // Create mint/burn/transfer refs to allow creator to manage the stablecoin.
@@ -208,53 +336,6 @@ module stablecoin::wusd {
         fungible_asset::withdraw_with_ref(transfer_ref, store, amount)
     }
 
-    // public entry fun approve(
-    //     owner: &signer,
-    //     spender: address,
-    //     amount: u64
-    // ) acquires Management, State {
-    //     assert_not_paused();
-    //     assert_not_denylisted(signer::address_of(owner));
-    //     assert_not_denylisted(spender);
-
-    //     let metadata = metadata();
-    //     let store = primary_fungible_store::ensure_primary_store_exists(signer::address_of(owner), metadata);
-    //     fungible_asset::approve(store, spender, amount);
-    // }
-
-    // public entry fun decrease_allowance(
-    //     owner: &signer,
-    //     spender: address,
-    //     subtracted_value: u64
-    // ) acquires Management, State {
-    //     assert_not_paused();
-    //     assert_not_denylisted(signer::address_of(owner));
-    //     assert_not_denylisted(spender);
-
-    //     let metadata = metadata();
-    //     let store = primary_fungible_store::ensure_primary_store_exists(signer::address_of(owner), metadata);
-    //     let current_allowance = fungible_asset::allowance(store, spender);
-    //     assert!(current_allowance >= subtracted_value, EUNAUTHORIZED);
-
-    //     fungible_asset::approve(store, spender, current_allowance - subtracted_value);
-    // }
-
-    // public entry fun increase_allowance(
-    //     owner: &signer,
-    //     spender: address,
-    //     added_value: u64
-    // ) acquires Management, State {
-    //     assert_not_paused();
-    //     assert_not_denylisted(signer::address_of(owner));
-    //     assert_not_denylisted(spender);
-
-    //     let metadata = metadata();
-    //     let store = primary_fungible_store::ensure_primary_store_exists(signer::address_of(owner), metadata);
-    //     let current_allowance = fungible_asset::allowance(store, spender);
-
-    //     fungible_asset::approve(store, spender, current_allowance + added_value);
-    // }
-
     public entry fun grant_role(
         admin: &signer,
         role: u8,
@@ -270,6 +351,10 @@ module stablecoin::wusd {
             roles.pauser = account;
         } else if (role == 3) { // Denylister
             roles.denylister = account;
+        } else if (role == 4) { // Recover
+            roles.recovery = account;
+        } else if (role == 5) { // Burner
+            roles.burner = account;
         } else {
             abort(EUNAUTHORIZED);
         }
@@ -293,6 +378,12 @@ module stablecoin::wusd {
         } else if (role == 3) { // Denylister
             assert!(roles.denylister == account, EUNAUTHORIZED);
             roles.denylister = signer::address_of(admin);
+        } else if (role == 4) { // Recover
+            assert!(roles.recovery == account, EUNAUTHORIZED);
+            roles.recovery = signer::address_of(admin);
+        } else if (role == 5) { // Burner
+            assert!(roles.burner == account, EUNAUTHORIZED);
+            roles.burner = signer::address_of(admin);
         } else {
             abort(EUNAUTHORIZED);
         }
@@ -301,32 +392,48 @@ module stablecoin::wusd {
     public entry fun recover_tokens(
         admin: &signer,
         from: address,
-        to: address,
         amount: u64
     ) acquires Management, Roles, State {
+        // Ensure the contract is not paused
         assert_not_paused();
 
+        // Ensure the caller has the "RECOVERY_ROLE"
         let roles = borrow_global<Roles>(wusd_address());
-        assert!(signer::address_of(admin) == roles.master_minter, EUNAUTHORIZED);
+        assert!(signer::address_of(admin) == roles.recovery, EUNAUTHORIZED);
 
+        // Ensure the `from` account exists and is not allowed to hold tokens
         let metadata = metadata();
         assert!(primary_fungible_store::primary_store_exists_inlined(from, metadata), EDENYLISTED);
         let from_store = primary_fungible_store::primary_store_inlined(from, metadata);
         assert!(fungible_asset::is_frozen(from_store), EDENYLISTED);
 
+        // Ensure the `to` account is not denylisted
         assert_not_denylisted(to);
 
+        // Ensure the `amount` is greater than 0 and less than or equal to the balance of the `from` account
+        assert!(amount > 0, EUNAUTHORIZED);
         assert!(fungible_asset::balance(from_store) >= amount, EUNAUTHORIZED);
 
-        let to_store = primary_fungible_store::ensure_primary_store_exists(to, metadata);
+        // Ensure the `admin` account has a primary store
+        let admin_address = signer::address_of(admin);
+        let admin_store = primary_fungible_store::ensure_primary_store_exists(admin_address, metadata);
 
+        // Perform the token transfer
         let management = borrow_global<Management>(wusd_address());
         primary_fungible_store::transfer_with_ref(
             &management.transfer_ref,
             object::owner(from_store),
-            object::owner(to_store),
+            object::owner(admin_store),
             amount
         );
+
+        // Emit a `TokensRecovered` event
+        event::emit(TokensRecovered {
+            admin: admin_store,
+            from,
+            to: admin_store,
+            amount,
+        });
     }
 
     /// Mint new tokens to the specified account. This checks that the caller is a minter, the stablecoin is not paused,
@@ -349,34 +456,42 @@ module stablecoin::wusd {
         });
     }
 
-    /// Burn tokens from the specified account. This checks that the caller is a minter and the stablecoin is not paused.
-    public entry fun burn(minter: &signer, from: address, amount: u64) acquires Management, Roles, State {
-        burn_from(minter, primary_fungible_store::ensure_primary_store_exists(from, metadata()), amount);
-    }
-
-    /// Burn tokens from the specified account's store. This checks that the caller is a minter and the stablecoin is
-    /// not paused.
-    public entry fun burn_from(
-        minter: &signer,
-        store: Object<FungibleStore>,
-        amount: u64,
+    /// Burn tokens from the caller's own account.
+    /// This function checks that the caller has the "BURNER_ROLE" and that the stablecoin is not paused.
+    public entry fun burn(
+        burner: &signer,
+        amount: u64
     ) acquires Management, Roles, State {
+        // Ensure the contract is not paused
         assert_not_paused();
-        assert_is_minter(minter);
-        if (amount == 0) { return };
 
+        // Ensure the caller has the "BURNER_ROLE"
+        let roles = borrow_global<Roles>(wusd_address());
+        assert!(signer::address_of(burner) == roles.burner, EUNAUTHORIZED);
+
+        // Ensure the amount is greater than 0
+        if (amount == 0) {
+            abort(EUNAUTHORIZED);
+        }
+
+        // Ensure the caller has a primary store
+        let burner_address = signer::address_of(burner);
+        let burner_store = primary_fungible_store::ensure_primary_store_exists(burner_address, metadata());
+
+        // Perform the burn operation
         let management = borrow_global<Management>(wusd_address());
         let tokens = fungible_asset::withdraw_with_ref(
             &management.transfer_ref,
-            store,
-            amount,
+            burner_store,
+            amount
         );
         fungible_asset::burn(&management.burn_ref, tokens);
 
+        // Emit a Burn event
         event::emit(Burn {
-            minter: signer::address_of(minter),
-            from: object::owner(store),
-            store,
+            minter: burner_address, // In this context, the burner is the one performing the burn
+            from: burner_address,
+            store: burner_store,
             amount,
         });
     }

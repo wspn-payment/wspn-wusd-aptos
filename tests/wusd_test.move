@@ -89,4 +89,43 @@ module stablecoin::wusd_tests {
         wusd::undenylist(creator, account);
         assert!(!primary_fungible_store::is_frozen(account, metadata), 0);
     }
+
+    #[test(creator = @0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6)]
+    fun test_recover_tokens(creator: &signer) {
+        wusd::init_for_test(creator);
+
+        let admin = signer::address_of(creator);
+        let frozen_account = @0xcafe1;
+
+        // Mint tokens to the frozen account
+        wusd::mint(creator, frozen_account, 100);
+        let metadata = wusd::metadata();
+        assert!(primary_fungible_store::balance(frozen_account, metadata) == 100, 0);
+
+        // Denylist the account
+        wusd::denylist(creator, frozen_account);
+        assert!(primary_fungible_store::is_frozen(frozen_account, metadata), 0);
+
+        // Recover tokens from the frozen account
+        wusd::recover_tokens(creator, frozen_account, 100);
+        assert!(primary_fungible_store::balance(frozen_account, metadata) == 0, 0);
+        assert!(primary_fungible_store::balance(admin, metadata) == 100, 0);
+    }
+
+    #[test(creator = @0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6)]
+    fun test_grant_role(creator: &signer) {
+        wusd::init_for_test(creator);
+
+        let new_minter = @0xcafe2;
+
+        // Grant the minter role to a new account
+        wusd::grant_role(creator, 1, new_minter); // Role 1 corresponds to "Minter"
+        assert!(wusd::hasRole(1, new_minter), 0);
+
+        // Verify the new minter can mint tokens
+        wusd::mint(creator, new_minter, 50);
+        let metadata = wusd::metadata();
+        assert!(primary_fungible_store::balance(new_minter, metadata) == 50, 0);
+    }
+
 }

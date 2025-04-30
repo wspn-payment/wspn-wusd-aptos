@@ -1,15 +1,16 @@
 [package]
 name = "stablecoin"
 version = "0.0.0"
+upgrade_policy = "compatible"
 
 [addresses]
-stablecoin = "_"
-master_minter = "_"
-minter = "_"
-pauser = "_"
-denylister = "_"
-recover = "_"
-burner = "_"
+stablecoin = "0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6"
+master_minter = "0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6"
+minter = "0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6"
+pauser = "0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6"
+denylister = "0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6"
+recover = "0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6"
+burner = "0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6"
 
 [dev-addresses]
 

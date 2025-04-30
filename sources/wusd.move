@@ -31,7 +31,7 @@ module stablecoin::wusd {
         minters: vector<address>,
         pauser: address,
         denylister: address,
-        recovery: address,
+        recover: address,
         burner: address,
     }
 
@@ -109,7 +109,7 @@ module stablecoin::wusd {
 
     #[view]
     public fun MINTER_ROLE(): address {
-        @minters
+        @minter
     }
 
     #[view]
@@ -124,7 +124,7 @@ module stablecoin::wusd {
 
     #[view]
     public fun RECOVERY_ROLE(): address {
-        @recovery
+        @recover
     }
 
     #[view]
@@ -137,17 +137,17 @@ module stablecoin::wusd {
         let roles = borrow_global<Roles>(wusd_address());
 
         if (role == 1) { // Minter
-            return roles.master_minter;
+            return roles.master_minter
         } else if (role == 2) { // Pauser
-            return roles.master_minter; // Assuming master_minter controls Pauser
+            return roles.master_minter // Assuming master_minter controls Pauser
         } else if (role == 3) { // Denylister
-            return roles.master_minter; // Assuming master_minter controls Denylister
+            return roles.master_minter // Assuming master_minter controls Denylister
         } else if (role == 4) { // Recovery
-            return roles.master_minter; // Assuming master_minter controls Recovery
+            return roles.master_minter // Assuming master_minter controls Recovery
         } else if (role == 5) { // Burner
-            return roles.master_minter; // Assuming master_minter controls Burner
+            return roles.master_minter // Assuming master_minter controls Burner
         } else {
-            abort(EUNAUTHORIZED); // Invalid role identifier
+            abort(EUNAUTHORIZED) // Invalid role identifier
         }
     }
 
@@ -156,66 +156,24 @@ module stablecoin::wusd {
         let roles = borrow_global<Roles>(wusd_address());
 
         if (role == 1) { // Minter
-            return signer::address_of(account) == roles.master_minter || vector::contains(&roles.minters, &account);
+            return account == roles.master_minter || vector::contains(&roles.minters, &account)
         } else if (role == 2) { // Pauser
-            return signer::address_of(account) == roles.pauser;
+            return account == roles.pauser
         } else if (role == 3) { // Denylister
-            return signer::address_of(account) == roles.denylister;
+            return account == roles.denylister
         } else if (role == 4) { // Recovery
-            return signer::address_of(account) == roles.recovery;
+            return account == roles.recover
         } else if (role == 5) { // Burner
-            return signer::address_of(account) == roles.burner;
+            return account == roles.burner
         } else {
-            abort(EUNAUTHORIZED); // Invalid role identifier
+            abort(EUNAUTHORIZED) // Invalid role identifier
         }
     }
 
     #[view]
-    public fun name(): vector<u8> acquires Metadata {
-        let metadata = metadata();
-        return metadata.name;
-    }
-
-    #[view]
-    public fun symbol(): vector<u8> acquires Metadata {
-        let metadata = metadata();
-        return metadata.symbol;
-    }
-
-    #[view]
-    public fun decimals(): u8 acquires Metadata {
-        let metadata = metadata();
-        return metadata.decimals;
-    }
-
-    #[view]
-    pubnlic fun totalSupply(): u64 acquires Metadata {
-        let metadata = metadata();
-        return metadata.total_supply;
-    }
-
-    #[view]
-    public fun balance_of(account: address): u64 acquires Metadata {
-        let metadata = metadata();
-        return primary_fungible_store::balance(account, metadata);
-    }
-
-    #[view]
-    public fun nonces(account: address): u64 acquires Metadata {
-        let metadata = metadata();
-        return primary_fungible_store::nonces(account, metadata);
-    }
-
-    #[view]
-    public fun allowance(owner: address, spender: address): u64 acquires Metadata {
-        let metadata = metadata();
-        return primary_fungible_store::allowance(owner, spender, metadata);
-    }
-    
-    #[view]
     public fun paused(): bool acquires State {
         let state = borrow_global<State>(wusd_address());
-        return state.paused;
+        return state.paused
     }
 
     /// Called as part of deployment to initialize the stablecoin.
@@ -247,7 +205,7 @@ module stablecoin::wusd {
             minters: vector[],
             pauser: @pauser,
             denylister: @denylister,
-            recover: @recovery,
+            recover: @recover,
             burner: @burner,
         });
 
@@ -352,11 +310,11 @@ module stablecoin::wusd {
         } else if (role == 3) { // Denylister
             roles.denylister = account;
         } else if (role == 4) { // Recover
-            roles.recovery = account;
+            roles.recover = account;
         } else if (role == 5) { // Burner
             roles.burner = account;
         } else {
-            abort(EUNAUTHORIZED);
+            abort(EUNAUTHORIZED)
         }
     }
 
@@ -379,13 +337,13 @@ module stablecoin::wusd {
             assert!(roles.denylister == account, EUNAUTHORIZED);
             roles.denylister = signer::address_of(admin);
         } else if (role == 4) { // Recover
-            assert!(roles.recovery == account, EUNAUTHORIZED);
-            roles.recovery = signer::address_of(admin);
+            assert!(roles.recover == account, EUNAUTHORIZED);
+            roles.recover = signer::address_of(admin);
         } else if (role == 5) { // Burner
             assert!(roles.burner == account, EUNAUTHORIZED);
             roles.burner = signer::address_of(admin);
         } else {
-            abort(EUNAUTHORIZED);
+            abort(EUNAUTHORIZED)
         }
     }
 
@@ -399,16 +357,13 @@ module stablecoin::wusd {
 
         // Ensure the caller has the "RECOVERY_ROLE"
         let roles = borrow_global<Roles>(wusd_address());
-        assert!(signer::address_of(admin) == roles.recovery, EUNAUTHORIZED);
+        assert!(signer::address_of(admin) == roles.recover, EUNAUTHORIZED);
 
         // Ensure the `from` account exists and is not allowed to hold tokens
         let metadata = metadata();
         assert!(primary_fungible_store::primary_store_exists_inlined(from, metadata), EDENYLISTED);
         let from_store = primary_fungible_store::primary_store_inlined(from, metadata);
         assert!(fungible_asset::is_frozen(from_store), EDENYLISTED);
-
-        // Ensure the `to` account is not denylisted
-        assert_not_denylisted(to);
 
         // Ensure the `amount` is greater than 0 and less than or equal to the balance of the `from` account
         assert!(amount > 0, EUNAUTHORIZED);
@@ -429,9 +384,9 @@ module stablecoin::wusd {
 
         // Emit a `TokensRecovered` event
         event::emit(TokensRecovered {
-            admin: admin_store,
+            admin: object::owner(admin_store),
             from,
-            to: admin_store,
+            to: object::owner(admin_store),
             amount,
         });
     }
@@ -471,8 +426,8 @@ module stablecoin::wusd {
 
         // Ensure the amount is greater than 0
         if (amount == 0) {
-            abort(EUNAUTHORIZED);
-        }
+            abort(EUNAUTHORIZED)
+        };
 
         // Ensure the caller has a primary store
         let burner_address = signer::address_of(burner);
@@ -501,7 +456,6 @@ module stablecoin::wusd {
         let roles = borrow_global<Roles>(wusd_address());
         assert!(signer::address_of(pauser) == roles.pauser, EUNAUTHORIZED);
         let state = borrow_global_mut<State>(wusd_address());
-        if (state.paused == paused) { return };
         state.paused = paused;
 
         event::emit(Pause {

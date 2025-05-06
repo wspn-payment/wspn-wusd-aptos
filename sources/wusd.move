@@ -133,19 +133,19 @@ module stablecoin::wusd {
     }
 
     #[view]
-    public fun getRoleAdmin(role: u8): address acquires Roles {
+    public fun getRoleAdmin(role: u8): vector<address> acquires Roles {
         let roles = borrow_global<Roles>(wusd_address());
 
         if (role == 1) { // Minter
-            return roles.master_minter
+            return roles.minters
         } else if (role == 2) { // Pauser
-            return roles.master_minter // Assuming master_minter controls Pauser
+            return  vector::singleton(roles.pauser) // Assuming master_minter controls Pauser
         } else if (role == 3) { // Denylister
-            return roles.master_minter // Assuming master_minter controls Denylister
+            return vector::singleton(roles.denylister) // Assuming master_minter controls Denylister
         } else if (role == 4) { // Recovery
-            return roles.master_minter // Assuming master_minter controls Recovery
+            return vector::singleton(roles.master_minter) // Assuming master_minter controls Recovery
         } else if (role == 5) { // Burner
-            return roles.master_minter // Assuming master_minter controls Burner
+            return vector::singleton(roles.master_minter) // Assuming master_minter controls Burner
         } else {
             abort(EUNAUTHORIZED) // Invalid role identifier
         }
@@ -396,6 +396,7 @@ module stablecoin::wusd {
     public entry fun mint(minter: &signer, to: address, amount: u64) acquires Management, Roles, State {
         assert_not_paused();
         assert_is_minter(minter);
+        assert!(to != @0x0, EUNAUTHORIZED);
         assert_not_denylisted(to);
         if (amount == 0) { return };
 

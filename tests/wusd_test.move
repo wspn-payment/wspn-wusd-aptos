@@ -2,9 +2,7 @@
 module stablecoin::wusd_tests {
     use std::signer;
     use aptos_framework::primary_fungible_store;
-    use aptos_framework::event;
     use stablecoin::wusd;
-    use std::option;
 
     #[test(creator = @0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6)]
     fun test_basic_flow(creator: &signer) {
@@ -24,15 +22,6 @@ module stablecoin::wusd_tests {
         assert!(!primary_fungible_store::is_frozen(creator_address, asset), 0);
         wusd::burn(creator, 90);
     }
-
-    // #[test(creator = @0xcafe)]
-    // fun test_initialization(creator: &signer) {
-    //     wusd::init_for_test(creator);
-
-    //     let metadata = wusd::metadata();
-    //     assert!(fungible_asset::metadata::name(metadata) == b"WUSD", 0);
-    //     assert!(fungible_asset::metadata::symbol(metadata) == b"WUSD", 0);
-    // }
 
     #[test(creator = @0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6)]
     fun test_minting(creator: &signer) {
@@ -127,5 +116,19 @@ module stablecoin::wusd_tests {
         let metadata = wusd::metadata();
         assert!(primary_fungible_store::balance(new_minter, metadata) == 50, 0);
     }
+    #[test(creator = @0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6)]
+    fun test_revoke_role(creator: &signer) {
+        wusd::init_for_test(creator);
 
+        let new_minter = @0xcafe2;
+
+        // Grant the minter role to a new account
+        wusd::grant_role(creator, 1, new_minter); // Role 1 corresponds to "Minter"
+        assert!(wusd::hasRole(1, new_minter), 0);
+
+        // Revoke the minter role from the new account
+        wusd::revoke_role(creator, 1, new_minter);
+        assert!(!wusd::hasRole(1, new_minter), 0);
+
+    }
 }

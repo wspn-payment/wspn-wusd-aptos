@@ -192,7 +192,7 @@ module stablecoin::wusd {
             utf8(ASSET_SYMBOL), /* symbol */
             8, /* decimals */
             utf8(b"http://example.com/favicon.ico"), /* icon */
-            utf8(b"http://example.com"), /* project */
+            utf8(b"https://wspn.io/"), /* project */
         );
 
         // Set ALL stores for the fungible asset to untransferable.

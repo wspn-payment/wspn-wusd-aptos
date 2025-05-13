@@ -17,10 +17,10 @@ module stablecoin::treasury {
 
     /// Address is not the master minter.
     const ENOT_MASTER_MINTER: u64 = 1;
-    /// Address is not the controller.
-    const ENOT_CONTROLLER: u64 = 2;
     /// Address is not a minter.
-    const ENOT_MINTER: u64 = 3;
+    const ENOT_MINTER: u64 = 2;
+    /// Address is not a burner.
+    const ENOT_BURNER: u64 = 3;
     /// Amount is zero.
     const EZERO_AMOUNT: u64 = 4;
     /// Insufficient minter allowance.
@@ -36,50 +36,43 @@ module stablecoin::treasury {
         burn_ref: BurnRef,
         /// The address of the stablecoin's master minter.
         master_minter: address,
-        /// Mapping containing controllers and the minter addresses they control.
-        controllers: SmartTable<address, address>,
-        /// Mapping containing minters and their mint allowance.
-        mint_allowances: SmartTable<address, u64>
+        /// Mapping containing authorized minters and their mint allowance.
+        minters: SmartTable<address, u64>,
+        /// Mapping containing authorized burners.
+        burners: SmartTable<address, bool>,
     }
 
     // === Events ===
 
     #[event]
-    struct ControllerConfigured has drop, store {
-        controller: address,
-        minter: address
-    }
-
-    #[event]
-    struct ControllerRemoved has drop, store {
-        controller: address
-    }
-
-    #[event]
-    struct MinterConfigured has drop, store {
-        controller: address,
+    struct MinterAdded has drop, store {
+        admin: address,
         minter: address,
-        allowance: u64
-    }
-
-    #[event]
-    struct MinterAllowanceIncremented has drop, store {
-        controller: address,
-        minter: address,
-        allowance_increment: u64,
-        new_allowance: u64
+        allowance: u64,
     }
 
     #[event]
     struct MinterRemoved has drop, store {
-        controller: address,
-        minter: address
+        admin: address,
+        minter: address,
     }
 
     #[event]
     struct Mint has drop, store {
         minter: address,
         amount: u64
+    }
+
+    #[event]
+    struct BurnerAdded has drop, store {
+        admin: address,
+        burner: address,
+    }
+
+    #[event]
+    struct BurnerRemoved has drop, store {
+        admin: address,
+        burner: address,
     }
 
     #[event]
@@ -114,7 +107,15 @@ module stablecoin::treasury {
     #[view]
     /// Returns whether an address is a minter.
     public fun is_minter(minter: address): bool acquires TreasuryState {
-        internal_is_minter(borrow_global<TreasuryState>(stablecoin_address()), minter)
+        let treasury_state = borrow_global<TreasuryState>(stablecoin_address());
+        smart_table::contains(&treasury_state.minters, minter)
+    }
+
+    #[view]
+    /// Returns whether an address is a burner.
+    public fun is_burner(burner: address): bool acquires TreasuryState {
+        let treasury_state = borrow_global<TreasuryState>(stablecoin_address());
+        smart_table::contains(&treasury_state.burners, burner)
     }
 
     #[view]
@@ -122,8 +123,16 @@ module stablecoin::treasury {
     /// Defaults to zero if the address is not a minter.
     public fun mint_allowance(minter: address): u64 acquires TreasuryState {
         let treasury_state = borrow_global<TreasuryState>(stablecoin_address());
-        if (!internal_is_minter(treasury_state, minter)) return 0;
-        internal_get_mint_allowance(treasury_state, minter)
+        if (!smart_table::contains(&treasury_state.minters, minter)) return 0;
+        *smart_table::borrow(&treasury_state.minters, minter)
+    }
+
+    #[view]
+    /// Gets the burner address of a stablecoin.
+    public fun get_burner(burner: address): Option<bool> acquires TreasuryState {
+        let treasury_state = borrow_global<TreasuryState>(stablecoin_address());
+        if (!internal_is_minter(treasury_state, burner)) return option::none();
+        option::some(internal_get_mint_allowance(treasury_state, burner))
     }
 
     // === Write functions ===
@@ -174,103 +183,106 @@ module stablecoin::treasury {
     //     event::emit(ControllerRemoved { controller })
     // }
 
-    /// Authorizes a minter address to mint and burn, and sets its allowance.
-    /// Only callable by the minter's controller.
-    entry fun configure_minter(caller: &signer, allowance: u64) acquires TreasuryState {
-        let stablecoin_address = stablecoin_address();
-        pausable::assert_not_paused(stablecoin_address);
+    /// Adds a minter with a specified allowance.
+    /// Only callable by the master minter.
+    entry fun add_minter(caller: &signer, minter: address, allowance: u64) acquires TreasuryState {
+        let treasury_state = borrow_global_mut<TreasuryState>(stablecoin_address());
+        assert!(signer::address_of(caller) == treasury_state.master_minter, ENOT_MASTER_MINTER);
 
-        let treasury_state = borrow_global_mut<TreasuryState>(stablecoin_address);
+        smart_table::upsert(&mut treasury_state.minters, minter, allowance);
 
-        let controller = signer::address_of(caller);
-        assert!(internal_is_controller(treasury_state, controller), ENOT_CONTROLLER);
-
-        let minter = internal_get_minter(treasury_state, controller);
-        internal_set_mint_allowance(treasury_state, minter, allowance);
-
-        event::emit(MinterConfigured { controller, minter, allowance })
-    }
-
-    /// Increment the mint allowance for a minter.
-    /// Only callable by the minter's controller.
-    entry fun increment_minter_allowance(caller: &signer, allowance_increment: u64) acquires TreasuryState {
-        let stablecoin_address = stablecoin_address();
-        pausable::assert_not_paused(stablecoin_address);
-        assert!(allowance_increment != 0, EZERO_AMOUNT);
-
-        let treasury_state = borrow_global_mut<TreasuryState>(stablecoin_address);
-
-        let controller = signer::address_of(caller);
-        assert!(internal_is_controller(treasury_state, controller), ENOT_CONTROLLER);
-
-        let minter = internal_get_minter(treasury_state, controller);
-        assert!(internal_is_minter(treasury_state, minter), ENOT_MINTER);
-
-        let new_allowance = internal_get_mint_allowance(treasury_state, minter) + allowance_increment;
-        internal_set_mint_allowance(treasury_state, minter, new_allowance);
-
-        event::emit(
-            MinterAllowanceIncremented { controller, minter, allowance_increment, new_allowance }
-        )
+        event::emit(MinterAdded {
+            admin: signer::address_of(caller),
+            minter,
+            allowance,
+        });
     }
 
     /// Removes a minter.
-    /// Only callable by the minter's controller.
-    entry fun remove_minter(caller: &signer) acquires TreasuryState {
+    /// Only callable by the master minter.
+    entry fun remove_minter(caller: &signer, minter: address) acquires TreasuryState {
         let treasury_state = borrow_global_mut<TreasuryState>(stablecoin_address());
+        assert!(signer::address_of(caller) == treasury_state.master_minter, ENOT_MASTER_MINTER);
 
-        let controller = signer::address_of(caller);
-        assert!(internal_is_controller(treasury_state, controller), ENOT_CONTROLLER);
+        if (smart_table::contains(&treasury_state.minters, minter)) {
+            smart_table::remove(&mut treasury_state.minters, minter);
+        }
 
-        let minter = internal_get_minter(treasury_state, controller);
-        assert!(internal_is_minter(treasury_state, minter), ENOT_MINTER);
-
-        smart_table::remove(&mut treasury_state.mint_allowances, minter);
-
-        event::emit(MinterRemoved { controller, minter })
+        event::emit(MinterRemoved {
+            admin: signer::address_of(caller),
+            minter,
+        });
     }
 
-    /// Mints an amount of Fungible Asset (limited to the minter's allowance)
-    /// and returns the minted asset, increasing the total supply
-    /// and decreasing the minter's allowance.
+    /// Mints an amount of Fungible Asset (limited to the minter's allowance).
     public fun mint(caller: &signer, amount: u64): FungibleAsset acquires TreasuryState {
         let stablecoin_address = stablecoin_address();
         assert!(amount != 0, EZERO_AMOUNT);
         pausable::assert_not_paused(stablecoin_address);
 
-        let treasury_state = borrow_global_mut<TreasuryState>(stablecoin_address);
+        let treasury_state = borrow_global_mut<TreasuryState>(stablecoin_address());
 
         let minter = signer::address_of(caller);
-        assert!(internal_is_minter(treasury_state, minter), ENOT_MINTER);
+        assert!(smart_table::contains(&treasury_state.minters, minter), ENOT_MINTER);
         blocklistable::assert_not_blocklisted(minter);
 
-        let mint_allowance = internal_get_mint_allowance(treasury_state, minter);
+        let mint_allowance = *smart_table::borrow(&treasury_state.minters, minter);
         assert!(mint_allowance >= amount, EINSUFFICIENT_ALLOWANCE);
 
         let asset = fungible_asset::mint(&treasury_state.mint_ref, amount);
-        internal_set_mint_allowance(treasury_state, minter, mint_allowance - amount);
+        smart_table::upsert(&mut treasury_state.minters, minter, mint_allowance - amount);
 
         event::emit(Mint { minter, amount });
 
         asset
     }
 
-    /// Burns an amount of Fungible Asset, decreasing the total supply.
+    /// Adds a burner.
+    /// Only callable by the master minter.
+    entry fun add_burner(caller: &signer, burner: address) acquires TreasuryState {
+        let treasury_state = borrow_global_mut<TreasuryState>(stablecoin_address());
+        assert!(signer::address_of(caller) == treasury_state.master_minter, ENOT_MASTER_MINTER);
+
+        smart_table::upsert(&mut treasury_state.burners, burner, true);
+
+        event::emit(BurnerAdded {
+            admin: signer::address_of(caller),
+            burner,
+        });
+    }
+
+    /// Removes a burner.
+    /// Only callable by the master minter.
+    entry fun remove_burner(caller: &signer, burner: address) acquires TreasuryState {
+        let treasury_state = borrow_global_mut<TreasuryState>(stablecoin_address());
+        assert!(signer::address_of(caller) == treasury_state.master_minter, ENOT_MASTER_MINTER);
+
+        if (smart_table::contains(&treasury_state.burners, burner)) {
+            smart_table::remove(&mut treasury_state.burners, burner);
+        }
+
+        event::emit(BurnerRemoved {
+            admin: signer::address_of(caller),
+            burner,
+        });
+    }
+
+    /// Burns an amount of Fungible Asset.
     public fun burn(caller: &signer, asset: FungibleAsset) acquires TreasuryState {
         let stablecoin_address = stablecoin_address();
         let amount = fungible_asset::amount(&asset);
         assert!(amount != 0, EZERO_AMOUNT);
         pausable::assert_not_paused(stablecoin_address);
 
-        let treasury_state = borrow_global<TreasuryState>(stablecoin_address);
+        let treasury_state = borrow_global<TreasuryState>(stablecoin_address());
 
         let burner = signer::address_of(caller);
-        assert!(internal_is_minter(treasury_state, burner), ENOT_MINTER);
+        assert!(smart_table::contains(&treasury_state.burners, burner), ENOT_BURNER);
         blocklistable::assert_not_blocklisted(burner);
 
         fungible_asset::burn(&treasury_state.burn_ref, asset);
 
-        event::emit(Burn { burner, amount })
+        event::emit(Burn { burner, amount });
     }
 
     /// Update master minter role
@@ -348,10 +360,10 @@ module stablecoin::treasury {
         fungible_asset::burn(&borrow_global<TreasuryState>(stablecoin_address()).burn_ref, asset)
     }
 
-    #[test_only]
-    public fun num_controllers_for_testing(): u64 acquires TreasuryState {
-        smart_table::length(&borrow_global<TreasuryState>(stablecoin_address()).controllers)
-    }
+    // #[test_only]
+    // public fun num_controllers_for_testing(): u64 acquires TreasuryState {
+    //     smart_table::length(&borrow_global<TreasuryState>(stablecoin_address()).controllers)
+    // }
 
     #[test_only]
     public fun num_mint_allowances_for_testing(): u64 acquires TreasuryState {

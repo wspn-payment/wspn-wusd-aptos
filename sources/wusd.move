@@ -26,6 +26,13 @@ module stablecoin::wusd {
     const ASSET_SYMBOL: vector<u8> = b"WUSD";
 
     #[resource_group_member(group = aptos_framework::object::ObjectGroup)]
+    /// The current and pending owner addresses state.
+    struct OwnerRole has key {
+        owner: address,
+        pending_owner: Option<address>
+    }
+
+    #[resource_group_member(group = aptos_framework::object::ObjectGroup)]
     struct Roles has key {
         master_minter: address,
         minters: vector<address>,
@@ -55,6 +62,34 @@ module stablecoin::wusd {
         chain_id: u8,
         spender: address,
         amount: u64,
+    }
+
+    #[event]
+    /// Emitted when the ownership transfer is started.
+    struct OwnershipTransferStarted has drop, store {
+        obj_address: address,
+        old_owner: address,
+        new_owner: address
+    }
+
+    #[event]
+    /// Emitted when the ownership is transferred to a new address.
+    struct OwnershipTransferred has drop, store {
+        obj_address: address,
+        old_owner: address,
+        new_owner: address
+    }
+
+    #[event]
+    /// Emitted when the OwnerRole resource is destroyed.
+    struct OwnerRoleDestroyed has drop, store {
+        obj_address: address
+    }
+
+    #[event]
+    struct MasterMinterChanged has drop, store {
+        old_master_minter: address,
+        new_master_minter: address
     }
 
     #[event]
@@ -90,6 +125,18 @@ module stablecoin::wusd {
         from: address,
         to: address,
         amount: u64,
+    }
+
+    #[view]
+    /// Returns the active owner address.
+    public fun owner(obj: Object<OwnerRole>): address acquires OwnerRole {
+        borrow_global<OwnerRole>(object::object_address(&obj)).owner
+    }
+
+    #[view]
+    /// Returns the pending owner address.
+    public fun pending_owner(obj: Object<OwnerRole>): Option<address> acquires OwnerRole {
+        borrow_global<OwnerRole>(object::object_address(&obj)).pending_owner
     }
 
     #[view]
@@ -175,6 +222,11 @@ module stablecoin::wusd {
         let state = borrow_global<State>(wusd_address());
         return state.paused
     }
+    /// Aborts if the caller is not the owner of the input object
+    public fun assert_is_owner(caller: &signer) acquires OwnerRole {
+        let obj = wusd_address();
+        assert!(owner(obj) == signer::address_of(caller), ENOT_OWNER);
+    }
 
     /// Called as part of deployment to initialize the stablecoin.
     /// Note: The signer has to be the account where the module is published.
@@ -200,6 +252,13 @@ module stablecoin::wusd {
 
         // All resources created will be kept in the asset metadata object.
         let metadata_object_signer = &object::generate_signer(constructor_ref);
+        
+        move_to(metadata_object_signer, OwnerRole {
+            owner: @wusd_signer,
+            pending_owner: option::none(),
+        });
+
+        // Create the stablecoin's object container.
         move_to(metadata_object_signer, Roles {
             master_minter: @master_minter,
             minters: vector[],
@@ -242,34 +301,40 @@ module stablecoin::wusd {
         );
     }
 
-    /// Allow a spender to transfer tokens from the owner's account given their signed approval.
-    /// Caller needs to provide the from account's scheme and public key which can be gotten via the Aptos SDK.
-    public fun transfer_from(
-        spender: &signer,
-        proof: vector<u8>,
-        from: address,
-        from_account_scheme: u8,
-        from_public_key: vector<u8>,
-        to: address,
-        amount: u64,
-    ) acquires Management, State {
-        assert_not_paused();
-        assert_not_denylisted(from);
-        assert_not_denylisted(to);
+    /// Starts the ownership transfer of the object by setting the pending owner to the new_owner address.
+    entry fun transfer_ownership(caller: &signer, obj: Object<OwnerRole>, new_owner: address) acquires OwnerRole {
+        let obj_address = object::object_address(&obj);
+        let owner_role = borrow_global_mut<OwnerRole>(obj_address);
+        assert!(owner_role.owner == signer::address_of(caller), ENOT_OWNER);
 
-        let expected_message = Approval {
-            owner: from,
-            to: to,
-            nonce: account::get_sequence_number(from),
-            chain_id: chain_id::get(),
-            spender: signer::address_of(spender),
-            amount,
-        };
-        account::verify_signed_message(from, from_account_scheme, from_public_key, proof, expected_message);
+        owner_role.pending_owner = option::some(new_owner);
 
-        let transfer_ref = &borrow_global<Management>(wusd_address()).transfer_ref;
-        // Only use with_ref API for primary_fungible_store (PFS) transfers in this module.
-        primary_fungible_store::transfer_with_ref(transfer_ref, from, to, amount);
+        event::emit(OwnershipTransferStarted { obj_address, old_owner: owner_role.owner, new_owner });
+    }
+
+    /// Transfers the ownership of the object by setting the owner to the pending owner address.
+    entry fun accept_ownership(caller: &signer, obj: Object<OwnerRole>) acquires OwnerRole {
+        let obj_address = object::object_address(&obj);
+        let owner_role = borrow_global_mut<OwnerRole>(obj_address);
+        assert!(option::is_some(&owner_role.pending_owner), EPENDING_OWNER_NOT_SET);
+        assert!(
+            option::contains(&owner_role.pending_owner, &signer::address_of(caller)),
+            ENOT_PENDING_OWNER
+        );
+
+        let old_owner = owner_role.owner;
+        let new_owner = option::extract(&mut owner_role.pending_owner);
+
+        owner_role.owner = new_owner;
+
+        event::emit(OwnershipTransferred { obj_address, old_owner, new_owner });
+    }
+
+    /// Removes the OwnerRole resource from the caller.
+    public fun destroy(caller: &signer) acquires OwnerRole {
+        let OwnerRole { owner: _, pending_owner: _ } = move_from<OwnerRole>(signer::address_of(caller));
+
+        event::emit(OwnerRoleDestroyed { obj_address: signer::address_of(caller) });
     }
 
     /// Deposit function override to ensure that the account is not denylisted and the stablecoin is not paused.
@@ -452,6 +517,18 @@ module stablecoin::wusd {
         });
     }
 
+    /// Update master minter role
+    public entry fun update_master_minter(caller: &signer, new_master_minter: address) acquires Roles {
+
+        assert_is_owner(caller, wusd_address());
+        let roles = borrow_global_mut<Roles>(wusd_address());
+
+        let old_master_minter = roles.master_minter;
+        roles.master_minter = new_master_minter;
+
+        event::emit(MasterMinterChanged { old_master_minter, new_master_minter });
+    }
+
     /// Pause or unpause the stablecoin. This checks that the caller is the pauser.
     public entry fun set_pause(pauser: &signer, paused: bool) acquires Roles, State {
         let roles = borrow_global<Roles>(wusd_address());
@@ -528,5 +605,48 @@ module stablecoin::wusd {
     #[test_only]
     public fun init_for_test(wusd_signer: &signer) {
         init_module(wusd_signer);
+    }
+
+    #[test_only]
+    public fun test_OwnershipTransferStarted_event(
+        obj_address: address, old_owner: address, new_owner: address
+    ): OwnershipTransferStarted {
+        OwnershipTransferStarted { obj_address, old_owner, new_owner }
+    }
+
+    #[test_only]
+    public fun test_OwnershipTransferred_event(
+        obj_address: address, old_owner: address, new_owner: address
+    ): OwnershipTransferred {
+        OwnershipTransferred { obj_address, old_owner, new_owner }
+    }
+
+    #[test_only]
+    public fun test_OwnerRoleDestroyed_event(obj_address: address): OwnerRoleDestroyed {
+        OwnerRoleDestroyed { obj_address }
+    }
+
+    #[test_only]
+    public fun test_transfer_ownership(
+        caller: &signer, obj: Object<OwnerRole>, new_owner: address
+    ) acquires OwnerRole {
+        transfer_ownership(caller, obj, new_owner);
+    }
+
+    #[test_only]
+    public fun test_accept_ownership(caller: &signer, obj: Object<OwnerRole>) acquires OwnerRole {
+        accept_ownership(caller, obj);
+    }
+
+    #[test_only]
+    public fun set_owner_for_testing(obj_address: address, owner: address) acquires OwnerRole {
+        let role = borrow_global_mut<OwnerRole>(obj_address);
+        role.owner = owner;
+    }
+
+    #[test_only]
+    public fun set_pending_owner_for_testing(obj_address: address, pending_owner: address) acquires OwnerRole {
+        let role = borrow_global_mut<OwnerRole>(obj_address);
+        role.pending_owner = option::some(pending_owner);
     }
 }

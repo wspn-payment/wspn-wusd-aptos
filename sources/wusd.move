@@ -6,11 +6,13 @@ module stablecoin::wusd {
     use aptos_framework::fungible_asset::{Self, MintRef, TransferRef, BurnRef, Metadata, FungibleAsset, FungibleStore};
     use aptos_framework::object::{Self, Object, ExtendRef};
     use aptos_framework::primary_fungible_store;
-    use std::option;
+    use std::option::{Self, Option};
     use std::signer;
     use std::string::{Self, utf8};
     use std::vector;
     use aptos_framework::chain_id;
+    use aptos_framework::table;
+
 
     /// Caller is not authorized to make this call
     const EUNAUTHORIZED: u64 = 1;
@@ -22,6 +24,20 @@ module stablecoin::wusd {
     const ENOT_MINTER: u64 = 4;
     /// The account is denylisted
     const EDENYLISTED: u64 = 5;
+    /// The account is not the owner
+    const ENOT_OWNER: u64 = 6;
+    /// The account is not the pending owner
+    const ENOT_PENDING_OWNER: u64 = 7;
+    /// The pending owner is not set
+    const EPENDING_OWNER_NOT_SET: u64 = 8;
+    /// The account is not denylisted
+    const ENOT_DENYLISTED: u64 = 9;
+    /// Invalid asset
+    const EINVALID_ASSET: u64 = 10;
+    /// The length of the vectors do not match
+    const EARGUMENT_VECTORS_LENGTH_MISMATCH: u64 = 11;
+    /// Cannot transfer ownership to the same address
+    const ESAME_OWNER: u64 = 12;
 
     const ASSET_SYMBOL: vector<u8> = b"WUSD";
 
@@ -53,6 +69,8 @@ module stablecoin::wusd {
     #[resource_group_member(group = aptos_framework::object::ObjectGroup)]
     struct State has key {
         paused: bool,
+        freeze_sending: Table<address, bool>,
+        freeze_receiving: Table<address, bool>,
     }
 
     struct Approval has drop {
@@ -125,6 +143,20 @@ module stablecoin::wusd {
         from: address,
         to: address,
         amount: u64,
+    }
+
+    #[event]
+    struct Freeze has drop, store {
+        account: address,
+        freeze_sending: bool,
+        freeze_receiving: bool,
+    }
+
+    #[event]
+    struct Unfreeze has drop, store {
+        account: address,
+        unfreeze_sending: bool,
+        unfreeze_receiving: bool,
     }
 
     #[view]
@@ -222,9 +254,18 @@ module stablecoin::wusd {
         let state = borrow_global<State>(wusd_address());
         return state.paused
     }
+
+    #[view]
+    public fun is_frozen(account: address): (bool, bool) acquires State {
+        let state = borrow_global<State>(wusd_address());
+        let freeze_sending = *table::borrow_with_default(&state.freeze_sending, account, &false);
+        let freeze_receiving = *table::borrow_with_default(&state.freeze_receiving, account, &false);
+        (freeze_sending, freeze_receiving)
+    }
+
     /// Aborts if the caller is not the owner of the input object
-    public fun assert_is_owner(caller: &signer) acquires OwnerRole {
-        let obj = wusd_address();
+    public fun assert_is_owner(caller: &signer, obj_address: address) acquires OwnerRole {
+        let obj = object::address_to_object<OwnerRole>(obj_address);
         assert!(owner(obj) == signer::address_of(caller), ENOT_OWNER);
     }
 
@@ -254,18 +295,18 @@ module stablecoin::wusd {
         let metadata_object_signer = &object::generate_signer(constructor_ref);
         
         move_to(metadata_object_signer, OwnerRole {
-            owner: @wusd_signer,
+            owner: signer::address_of(wusd_signer),
             pending_owner: option::none(),
         });
 
         // Create the stablecoin's object container.
         move_to(metadata_object_signer, Roles {
-            master_minter: @master_minter,
+            master_minter: signer::address_of(wusd_signer),
             minters: vector[],
-            pauser: @pauser,
-            denylister: @denylister,
-            recover: @recover,
-            burner: @burner,
+            pauser: signer::address_of(wusd_signer),
+            denylister: signer::address_of(wusd_signer),
+            recover: signer::address_of(wusd_signer),
+            burner: signer::address_of(wusd_signer),
         });
 
         // Create mint/burn/transfer refs to allow creator to manage the stablecoin.
@@ -278,6 +319,8 @@ module stablecoin::wusd {
 
         move_to(metadata_object_signer, State {
             paused: false,
+            freeze_sending: table::new(),
+            freeze_receiving: table::new(),
         });
 
         // Override the deposit and withdraw functions which mean overriding transfer.
@@ -343,6 +386,7 @@ module stablecoin::wusd {
         fa: FungibleAsset,
         transfer_ref: &TransferRef,
     ) acquires State {
+        assert!(fungible_asset::transfer_ref_metadata(transfer_ref) == metadata(), EINVALID_ASSET);
         assert_not_paused();
         assert_not_denylisted(object::owner(store));
         fungible_asset::deposit_with_ref(transfer_ref, store, fa);
@@ -354,6 +398,7 @@ module stablecoin::wusd {
         amount: u64,
         transfer_ref: &TransferRef,
     ): FungibleAsset acquires State {
+        assert!(fungible_asset::transfer_ref_metadata(transfer_ref) == metadata(), EINVALID_ASSET);
         assert_not_paused();
         assert_not_denylisted(object::owner(store));
         fungible_asset::withdraw_with_ref(transfer_ref, store, amount)
@@ -518,7 +563,7 @@ module stablecoin::wusd {
     }
 
     /// Update master minter role
-    public entry fun update_master_minter(caller: &signer, new_master_minter: address) acquires Roles {
+    public entry fun update_master_minter(caller: &signer, new_master_minter: address) acquires Roles, OwnerRole {
 
         assert_is_owner(caller, wusd_address());
         let roles = borrow_global_mut<Roles>(wusd_address());
@@ -599,6 +644,56 @@ module stablecoin::wusd {
         // Instead, we will call the inlined version of the function.
         if (primary_fungible_store::primary_store_exists_inlined(account, metadata)) {
             assert!(!fungible_asset::is_frozen(primary_fungible_store::primary_store_inlined(account, metadata)), EDENYLISTED);
+        }
+    }
+
+    public entry fun freeze_accounts(
+        admin: &signer,
+        accounts: vector<address>,
+        sending_flags: vector<bool>,
+        receiving_flags: vector<bool>,
+    ) acquires State {
+        assert!(vector::length(&accounts) == vector::length(&sending_flags), EARGUMENT_VECTORS_LENGTH_MISMATCH);
+        assert!(vector::length(&accounts) == vector::length(&receiving_flags), EARGUMENT_VECTORS_LENGTH_MISMATCH);
+        assert_is_admin(admin);
+        let state = borrow_global_mut<State>(wusd_address());
+        for (i in 0..vector::length(&accounts)) {
+            let account = *vector::borrow(&accounts, i);
+            let freeze_sending = *vector::borrow(&sending_flags, i);
+            if (freeze_sending) {
+                let current_value = table::borrow_mut_with_default(&mut state.freeze_sending, account, freeze_sending);
+                *current_value = true;
+            };
+            let freeze_receiving = *vector::borrow(&receiving_flags, i);
+            if (freeze_receiving) {
+                let current_value = table::borrow_mut_with_default(&mut state.freeze_receiving, account, freeze_receiving);
+                *current_value = true;
+            };
+            event::emit(Freeze { account, freeze_sending, freeze_receiving });
+        }
+    }
+
+    public entry fun unfreeze_accounts(
+        admin: &signer,
+        accounts: vector<address>,
+        unfreeze_sending: vector<bool>,
+        unfreeze_receiving: vector<bool>,
+    ) acquires State {
+        assert!(vector::length(&accounts) == vector::length(&unfreeze_sending), EARGUMENT_VECTORS_LENGTH_MISMATCH);
+        assert!(vector::length(&accounts) == vector::length(&unfreeze_receiving), EARGUMENT_VECTORS_LENGTH_MISMATCH);
+        assert_is_admin(admin);
+        let state = borrow_global_mut<State>(wusd_address());
+        for (i in 0..vector::length(&accounts)) {
+            let account = *vector::borrow(&accounts, i);
+            let unfreeze_sending = *vector::borrow(&unfreeze_sending, i);
+            let unfreeze_receiving = *vector::borrow(&unfreeze_receiving, i);
+            if (unfreeze_sending && table::contains(&state.freeze_sending, account)) {
+                table::remove(&mut state.freeze_sending, account);
+            };
+            if (unfreeze_receiving && table::contains(&state.freeze_receiving, account)) {
+                table::remove(&mut state.freeze_receiving, account);
+            };
+            event::emit(Unfreeze { account, unfreeze_sending, unfreeze_receiving });
         }
     }
 

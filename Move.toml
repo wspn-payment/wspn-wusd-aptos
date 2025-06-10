@@ -4,13 +4,14 @@ version = "0.0.0"
 upgrade_policy = "compatible"
 
 [addresses]
-stablecoin = "_"
-master_minter = "_"
-minter = "_"
-pauser = "_"
-denylister = "_"
-recover = "_"
-burner = "_"
+wusd = "0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b"
+stablecoin = "0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b"
+master_minter = "0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b"
+minter = "0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b"
+pauser = "0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b"
+denylister = "0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b"
+recover = "0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b"
+burner = "0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b"
 
 [dev-addresses]
 

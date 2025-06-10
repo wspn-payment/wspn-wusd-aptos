@@ -2,9 +2,16 @@
 module stablecoin::wusd_tests {
     use std::signer;
     use aptos_framework::primary_fungible_store;
+    use aptos_framework::account;
+    use std::option;
+    use aptos_framework::object;
     use stablecoin::wusd;
 
-    #[test(creator = @0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6)]
+    // Error codes
+    const EUNAUTHORIZED: u64 = 1;
+    const EPAUSED: u64 = 2;
+
+    #[test(creator = @0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b)]
     fun test_basic_flow(creator: &signer) {
         wusd::init_for_test(creator);
         let creator_address = signer::address_of(creator);
@@ -23,7 +30,7 @@ module stablecoin::wusd_tests {
         wusd::burn(creator, 90);
     }
 
-    #[test(creator = @0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6)]
+    #[test(creator = @0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b)]
     fun test_minting(creator: &signer) {
         wusd::init_for_test(creator);
 
@@ -34,11 +41,11 @@ module stablecoin::wusd_tests {
         assert!(primary_fungible_store::balance(receiver, metadata) == 100, 0);
     }
 
-    #[test(creator = @0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6)]
+    #[test(creator = @0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b)]
     fun test_burning(creator: &signer) {
         wusd::init_for_test(creator);
 
-        let receiver = @0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6;
+        let receiver = @0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b;
 
         wusd::mint(creator, receiver, 100);
         let metadata = wusd::metadata();
@@ -48,7 +55,7 @@ module stablecoin::wusd_tests {
         assert!(primary_fungible_store::balance(receiver, metadata) == 50, 0);
     }
     
-    #[test(creator = @0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6)]
+    #[test(creator = @0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b)]
     fun test_pausing(creator: &signer) {
         wusd::init_for_test(creator);
 
@@ -65,7 +72,7 @@ module stablecoin::wusd_tests {
         assert!(primary_fungible_store::balance(receiver, metadata) == 100, 0);
     }
 
-    #[test(creator = @0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6)]
+    #[test(creator = @0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b)]
     fun test_denylist(creator: &signer) {
         wusd::init_for_test(creator);
 
@@ -79,7 +86,7 @@ module stablecoin::wusd_tests {
         assert!(!primary_fungible_store::is_frozen(account, metadata), 0);
     }
 
-    #[test(creator = @0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6)]
+    #[test(creator = @0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b)]
     fun test_recover_tokens(creator: &signer) {
         wusd::init_for_test(creator);
 
@@ -101,7 +108,7 @@ module stablecoin::wusd_tests {
         assert!(primary_fungible_store::balance(admin, metadata) == 100, 0);
     }
 
-    #[test(creator = @0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6)]
+    #[test(creator = @0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b)]
     fun test_grant_role(creator: &signer) {
         wusd::init_for_test(creator);
 
@@ -116,7 +123,7 @@ module stablecoin::wusd_tests {
         let metadata = wusd::metadata();
         assert!(primary_fungible_store::balance(new_minter, metadata) == 50, 0);
     }
-    #[test(creator = @0x08483dc9fca3a6d411662ce73475e8007b9b0104aa28eb3a933cef93c71ed8f6)]
+    #[test(creator = @0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b)]
     fun test_revoke_role(creator: &signer) {
         wusd::init_for_test(creator);
 
@@ -130,5 +137,82 @@ module stablecoin::wusd_tests {
         wusd::revoke_role(creator, 1, new_minter);
         assert!(!wusd::hasRole(1, new_minter), 0);
 
+    }
+
+    #[test(creator = @0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b)]
+    fun test_ownership_transfer(creator: &signer) {
+        wusd::init_for_test(creator);
+        let new_owner = @0xcafe3;
+        
+        // Test starting ownership transfer
+        let owner_role_obj = object::address_to_object<wusd::OwnerRole>(wusd::wusd_address());
+        wusd::transfer_ownership(creator, owner_role_obj, new_owner);
+        assert!(option::is_some(&wusd::pending_owner(owner_role_obj)), 0);
+        
+        // Test accepting ownership
+        let new_owner_signer = account::create_account_for_test(new_owner);
+        wusd::accept_ownership(&new_owner_signer, owner_role_obj);
+        assert!(wusd::owner(owner_role_obj) == new_owner, 0);
+    }
+
+    #[test(creator = @0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b)]
+    #[expected_failure(abort_code = EUNAUTHORIZED)]
+    fun test_unauthorized_mint(creator: &signer) {
+        wusd::init_for_test(creator);
+        let unauthorized = account::create_account_for_test(@0xcafe4);
+        wusd::mint(&unauthorized, @0xcafe5, 100);
+    }
+
+    #[test(creator = @0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b)]
+    #[expected_failure(abort_code = EPAUSED)]
+    fun test_mint_when_paused(creator: &signer) {
+        wusd::init_for_test(creator);
+        wusd::set_pause(creator, true);
+        wusd::mint(creator, @0xcafe6, 100);
+    }
+
+    #[test(creator = @0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b)]
+    fun test_update_master_minter(creator: &signer) {
+        wusd::init_for_test(creator);
+        let new_master_minter = @0xcafe7;
+        
+        wusd::update_master_minter(creator, new_master_minter);
+        assert!(wusd::CONTRACT_ADMIN_ROLE() == new_master_minter, 0);
+    }
+
+    #[test(creator = @0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b)]
+    fun test_batch_operations(creator: &signer) {
+        wusd::init_for_test(creator);
+        let receiver1 = @0xcafe8;
+        let receiver2 = @0xcafe9;
+        
+        // Test batch minting
+        wusd::mint(creator, receiver1, 100);
+        wusd::mint(creator, receiver2, 200);
+        
+        let metadata = wusd::metadata();
+        assert!(primary_fungible_store::balance(receiver1, metadata) == 100, 0);
+        assert!(primary_fungible_store::balance(receiver2, metadata) == 200, 0);
+        
+        // Test batch denylisting
+        wusd::denylist(creator, receiver1);
+        wusd::denylist(creator, receiver2);
+        assert!(primary_fungible_store::is_frozen(receiver1, metadata), 0);
+        assert!(primary_fungible_store::is_frozen(receiver2, metadata), 0);
+    }
+
+    #[test(creator = @0x603f471513629c04d7da1621d5e7af0cf53d125b5b8d4a9ef801fb67aa996b7b)]
+    fun test_edge_cases(creator: &signer) {
+        wusd::init_for_test(creator);
+        
+        // Test minting 0 tokens
+        wusd::mint(creator, @0xcafe10, 0);
+        let metadata = wusd::metadata();
+        assert!(primary_fungible_store::balance(@0xcafe10, metadata) == 0, 0);
+        
+        // Test burning 0 tokens
+        wusd::mint(creator, signer::address_of(creator), 100);
+        wusd::burn(creator, 0);
+        assert!(primary_fungible_store::balance(signer::address_of(creator), metadata) == 100, 0);
     }
 }
